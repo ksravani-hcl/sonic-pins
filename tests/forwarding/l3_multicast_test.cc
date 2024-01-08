@@ -165,7 +165,7 @@ absl::StatusOr<std::vector<std::string>> GetNUpInterfaceIDs(
 }
 
 // Add table entries for multicast_router_interface_table.
-absl::StatusOr<std::vector<p4::v1::Entity>> CreateRifTableEntities(
+inline absl::StatusOr<std::vector<p4::v1::Entity>> CreateRifTableEntities(
     const pdpi::IrP4Info& ir_p4info, const std::string& port_id,
     const int instance, const netaddr::MacAddress& src_mac) {
   ASSIGN_OR_RETURN(std::vector<p4::v1::Entity> entities,
@@ -197,9 +197,11 @@ absl::StatusOr<std::vector<p4::v1::Entity>> CreateMulticastGroupEntities(
 }
 
 // Add table entries for ipv4_multicast_table.
-absl::StatusOr<std::vector<p4::v1::Entity>> CreateIpv4MulticastTableEntities(
-    const pdpi::IrP4Info& ir_p4info, const std::string& vrf_id,
-    const netaddr::Ipv4Address& ip_address, int multicast_group_id) {
+inline absl::StatusOr<std::vector<p4::v1::Entity>>
+CreateIpv4MulticastTableEntities(const pdpi::IrP4Info& ir_p4info,
+                                 const std::string& vrf_id,
+                                 const netaddr::Ipv4Address& ip_address,
+                                 int multicast_group_id) {
   ASSIGN_OR_RETURN(
       std::vector<p4::v1::Entity> entities,
       sai::EntryBuilder()
@@ -210,9 +212,11 @@ absl::StatusOr<std::vector<p4::v1::Entity>> CreateIpv4MulticastTableEntities(
 }
 
 // Add table entries for ipv6_multicast_table.
-absl::StatusOr<std::vector<p4::v1::Entity>> CreateIpv6MulticastTableEntities(
-    const pdpi::IrP4Info& ir_p4info, const std::string& vrf_id,
-    const netaddr::Ipv6Address& ip_address, int multicast_group_id) {
+inline absl::StatusOr<std::vector<p4::v1::Entity>>
+CreateIpv6MulticastTableEntities(const pdpi::IrP4Info& ir_p4info,
+                                 const std::string& vrf_id,
+                                 const netaddr::Ipv6Address& ip_address,
+                                 int multicast_group_id) {
   ASSIGN_OR_RETURN(
       std::vector<p4::v1::Entity> entities,
       sai::EntryBuilder()
@@ -668,8 +672,6 @@ TEST_P(L3MulticastTestFixture, DeleteNonexistentIpmcEntryFails) {
 }
 
 TEST_P(L3MulticastTestFixture, BasicReplicationProgramming) {
-  GetParam().mirror_testbed->GetMirrorTestbed().Environment().SetTestCaseID(
-      "ff124866-d117-418d-bd29-a0740a18043e");
   thinkit::MirrorTestbed& testbed =
       GetParam().mirror_testbed->GetMirrorTestbed();
   const int kNumberMulticastGroupsInTest = 1;
@@ -749,8 +751,6 @@ TEST_P(L3MulticastTestFixture, BasicReplicationProgramming) {
 }
 
 TEST_P(L3MulticastTestFixture, BasicReplicationProgrammingWithAclRedirect) {
-  GetParam().mirror_testbed->GetMirrorTestbed().Environment().SetTestCaseID(
-      "f0cae11a-7829-4be3-b84a-497f86d5d7ca");
 
   if (!gpins::TableHasMatchField(
           ir_p4info_, "acl_ingress_mirror_and_redirect_table", "in_port")) {
