@@ -32,6 +32,7 @@
 #include "absl/time/time.h"
 #include "absl/types/span.h"
 #include "dvaas/dataplane_validation.h"
+#include "dvaas/port_id_map.h"
 #include "dvaas/test_vector.h"
 #include "dvaas/test_vector.pb.h"
 #include "dvaas/validation_result.h"
@@ -52,9 +53,11 @@
 #include "p4_pdpi/packetlib/packetlib.pb.h"
 #include "p4_pdpi/sequencing.h"
 #include "platforms/networking/gpins/testing/blackbox/p4/dvaas/gpins_dvaas.h"
+#include "platforms/networking/gpins/testing/lib/test_util.h"
 #include "sai_p4/instantiations/google/test_tools/test_entries.h"
 #include "tests/lib/switch_test_setup_helpers.h"
 #include "thinkit/switch.h"
+#include "util/gtl/value_or_die.h"
 
 namespace pins_test {
 namespace {
@@ -65,9 +68,14 @@ using ::testing::AllOf;
 using ::testing::HasSubstr;
 
 // Common programming parameters.
+constexpr int kMaxRifs = 128;
+// TODO: Increase to 512 multicast groups.
+constexpr int kMaxMulticastGroups = 505;
 constexpr absl::string_view kDefaultMulticastVrf = "vrf-mcast";
 constexpr netaddr::MacAddress kOriginalSrcMacAddress(0x00, 0x22, 0x33, 0x44,
                                                      0x55, 0x66);
+constexpr netaddr::MacAddress kDropSrcMacAddress(0x02, 0x2a, 0x10, 0x00, 0x00,
+                                                 0x02);
 constexpr int kDefaultInstance = 0;
 // Pair of port ID and instance.
 struct ReplicaPair {
@@ -164,8 +172,7 @@ inline absl::StatusOr<std::vector<p4::v1::Entity>> CreateRifTableEntities(
                             .multicast_replica_instance = instance,
                             .src_mac = src_mac})
                        .LogPdEntries()
-                       .GetDedupedPiEntities(ir_p4info,
-                                             /*allow_unsupported=*/true));
+                       .GetDedupedPiEntities(ir_p4info));
   return entities;
 }
 
@@ -197,8 +204,7 @@ CreateIpv4MulticastTableEntities(const pdpi::IrP4Info& ir_p4info,
       sai::EntryBuilder()
           .AddMulticastRoute(vrf_id, ip_address, multicast_group_id)
           .LogPdEntries()
-          .GetDedupedPiEntities(ir_p4info,
-                                /*allow_unsupported=*/true));
+          .GetDedupedPiEntities(ir_p4info));
   return entities;
 }
 
@@ -213,8 +219,7 @@ CreateIpv6MulticastTableEntities(const pdpi::IrP4Info& ir_p4info,
       sai::EntryBuilder()
           .AddMulticastRoute(vrf_id, ip_address, multicast_group_id)
           .LogPdEntries()
-          .GetDedupedPiEntities(ir_p4info,
-                                /*allow_unsupported=*/true));
+          .GetDedupedPiEntities(ir_p4info));
   return entities;
 }
 
@@ -686,7 +691,15 @@ TEST_P(L3MulticastTestFixture, BasicReplicationProgramming) {
   LOG(INFO) << "Sending traffic to verify added multicast programming.";
   dvaas::DataplaneValidationParams dvaas_params =
       dvaas::DefaultGpinsDataplaneValidationParams();
+  // Ensure the port map for the control switch can map to the SUT (for
+  // situations where the config differs for SUT and control switch).
+  auto interface_to_peer_entity_map = gtl::ValueOrDie(
+      gpins::ControlP4rtPortIdBySutP4rtPortIdFromSwitchConfig());
+  dvaas_params.mirror_testbed_port_map_override = gtl::ValueOrDie(
+      dvaas::MirrorTestbedP4rtPortIdMap::CreateFromControlSwitchToSutPortMap(
+          interface_to_peer_entity_map));
   dvaas_params.packet_test_vector_override = vectors;
+
   ASSERT_OK_AND_ASSIGN(
       dvaas::ValidationResult validation_result,
       GetParam().dvaas->ValidateDataplane(testbed, dvaas_params));
@@ -917,31 +930,303 @@ TEST_P(L3MulticastTestFixture, AddIpmcEntryForUnknownVrfFails) {
   EXPECT_OK(ClearEntities(*sut_p4rt_session_, ir_p4info_, rif_entities));
 }
 
-// TEST_P(L3MulticastTestFixture, InvalidProgrammingInvalidIpAddress) {
-//   GetParam().mirror_testbed->GetMirrorTestbed().Environment().SetTestCaseID(
-//       "f698d03b-cca2-41cc-954e-c5bec6969872");
-//   GTEST_SKIP() << "Skipping because this test is not implemented yet.";
-// }
-// TEST_P(L3MulticastTestFixture, InvalidOrderDeleteRifWhileInUse) {
-//   GetParam().mirror_testbed->GetMirrorTestbed().Environment().SetTestCaseID(
-//       "9887f929-4e9d-4a68-b48e-6cafcfd6c07f");
-//   GTEST_SKIP() << "Skipping because this test is not implemented yet.";
-// }
-// TEST_P(L3MulticastTestFixture, InvalidOrderDeleteMulticastGroupWhileInUse) {
-//   GetParam().mirror_testbed->GetMirrorTestbed().Environment().SetTestCaseID(
-//       "634ca5f6-1a50-4a37-9936-d03d86e7aaeb");
-//   GTEST_SKIP() << "Skipping because this test is not implemented yet.";
-// }
-// TEST_P(L3MulticastTestFixture, CapacityMulticastRifs) {
-//   GetParam().mirror_testbed->GetMirrorTestbed().Environment().SetTestCaseID(
-//       "81099928-4181-4366-9519-885359a2f7e3");
-//   GTEST_SKIP() << "Skipping because this test is not implemented yet.";
-// }
-// TEST_P(L3MulticastTestFixture, CapacityMulticastGroupsAndMembers) {
-//   GetParam().mirror_testbed->GetMirrorTestbed().Environment().SetTestCaseID(
-//       "d35ff878-dc12-4623-82d4-81298006482a");
-//   GTEST_SKIP() << "Skipping because this test is not implemented yet.";
-// }
+TEST_P(L3MulticastTestFixture, AddIpmcEntryWithInvalidIPv4AddressFails) {
+  GetParam().mirror_testbed->GetMirrorTestbed().Environment().SetTestCaseID(
+      "f698d03b-cca2-41cc-954e-c5bec6969872");
+  const int kPortsToUseInTest = 2;
+  ASSERT_OK_AND_ASSIGN(
+      const std::vector<std::string> sut_ports_ids,
+      GetNUpInterfaceIDs(GetParam().mirror_testbed->GetMirrorTestbed().Sut(),
+                         kPortsToUseInTest));
+
+  std::vector<p4::v1::Entity> rif_entities;
+  for (int r = 0; r < kPortsToUseInTest; ++r) {
+    ASSERT_OK_AND_ASSIGN(
+        const auto rifs,
+        CreateRifTableEntities(ir_p4info_, sut_ports_ids[r], kDefaultInstance,
+                               kOriginalSrcMacAddress));
+    rif_entities.insert(rif_entities.end(), rifs.begin(), rifs.end());
+  }
+  EXPECT_OK(pdpi::InstallPiEntities(sut_p4rt_session_.get(), ir_p4info_,
+                                    rif_entities));
+
+  std::vector<ReplicaPair> replicas;
+  for (int r = 0; r < kPortsToUseInTest; ++r) {
+    const std::string& port_id = sut_ports_ids[r];
+    replicas.push_back({port_id, kDefaultInstance});
+  }
+  const int kMulticastGroupId = 1;
+  ASSERT_OK_AND_ASSIGN(
+      const auto mc_entities,
+      CreateMulticastGroupEntities(ir_p4info_, kMulticastGroupId, replicas));
+  EXPECT_OK(pdpi::InstallPiEntities(sut_p4rt_session_.get(), ir_p4info_,
+                                    mc_entities));
+
+  // Create default VRF.
+  ASSERT_OK_AND_ASSIGN(const std::vector<p4::v1::Entity> vrf_entities,
+                       sai::EntryBuilder()
+                           .AddVrfEntry(kDefaultMulticastVrf)
+                           .LogPdEntries()
+                           .GetDedupedPiEntities(ir_p4info_));
+  EXPECT_OK(pdpi::InstallPiEntities(sut_p4rt_session_.get(), ir_p4info_,
+                                    vrf_entities));
+
+  // Create IPMC entry with invalid IPv4 address (not multicast range).
+  const netaddr::Ipv4Address ipv4_address = netaddr::Ipv4Address(64, 10, 0, 1);
+  std::string vrf_id = std::string(kDefaultMulticastVrf);
+  ASSERT_OK_AND_ASSIGN(
+      const auto ipmc_entities,
+      CreateIpv4MulticastTableEntities(ir_p4info_, vrf_id, ipv4_address,
+                                       kMulticastGroupId));
+
+  EXPECT_THAT(pdpi::InstallPiEntities(sut_p4rt_session_.get(), ir_p4info_,
+                                      ipmc_entities),
+              StatusIs(absl::StatusCode::kUnknown,
+                       AllOf(HasSubstr("#1: INVALID_ARGUMENT"),
+                             HasSubstr("[SAI] SWSS_RC_INVALID_PARAM"))));
+
+  // Clean up.
+  EXPECT_OK(ClearEntities(*sut_p4rt_session_, ir_p4info_, vrf_entities));
+  EXPECT_OK(ClearEntities(*sut_p4rt_session_, ir_p4info_, mc_entities));
+  EXPECT_OK(ClearEntities(*sut_p4rt_session_, ir_p4info_, rif_entities));
+}
+
+TEST_P(L3MulticastTestFixture, DeleteRifWhileInUseFails) {
+  GetParam().mirror_testbed->GetMirrorTestbed().Environment().SetTestCaseID(
+      "9887f929-4e9d-4a68-b48e-6cafcfd6c07f");
+  const int kPortsToUseInTest = 2;
+  ASSERT_OK_AND_ASSIGN(
+      const std::vector<std::string> sut_ports_ids,
+      GetNUpInterfaceIDs(GetParam().mirror_testbed->GetMirrorTestbed().Sut(),
+                         kPortsToUseInTest));
+
+  std::vector<p4::v1::Entity> rif_entities;
+  for (int r = 0; r < kPortsToUseInTest; ++r) {
+    ASSERT_OK_AND_ASSIGN(
+        const auto rifs,
+        CreateRifTableEntities(ir_p4info_, sut_ports_ids[r], kDefaultInstance,
+                               kOriginalSrcMacAddress));
+    rif_entities.insert(rif_entities.end(), rifs.begin(), rifs.end());
+  }
+  EXPECT_OK(pdpi::InstallPiEntities(sut_p4rt_session_.get(), ir_p4info_,
+                                    rif_entities));
+
+  std::vector<ReplicaPair> replicas;
+  for (int r = 0; r < kPortsToUseInTest; ++r) {
+    const std::string& port_id = sut_ports_ids[r];
+    replicas.push_back({port_id, kDefaultInstance});
+  }
+  const int kMulticastGroupId = 1;
+  ASSERT_OK_AND_ASSIGN(
+      const auto mc_entities,
+      CreateMulticastGroupEntities(ir_p4info_, kMulticastGroupId, replicas));
+  EXPECT_OK(pdpi::InstallPiEntities(sut_p4rt_session_.get(), ir_p4info_,
+                                    mc_entities));
+
+  // Attempting to delete a RIF entry while it is in use by a multicast group
+  // causes an error.
+  EXPECT_THAT(
+      ClearEntities(*sut_p4rt_session_, ir_p4info_, rif_entities),
+      StatusIs(absl::StatusCode::kUnknown,
+               AllOf(HasSubstr("#1: INVALID_ARGUMENT"),
+                     HasSubstr("[OrchAgent] RIF oid "),
+                     HasSubstr("is still used by multicast group members"),
+                     HasSubstr("#2: ABORTED"),
+                     HasSubstr("[OrchAgent] SWSS_RC_NOT_EXECUTED"))));
+
+  // Clean up.
+  EXPECT_OK(ClearEntities(*sut_p4rt_session_, ir_p4info_, mc_entities));
+  EXPECT_OK(ClearEntities(*sut_p4rt_session_, ir_p4info_, rif_entities));
+}
+
+TEST_P(L3MulticastTestFixture, DeleteMulticastGroupWhileInUseFails) {
+  GetParam().mirror_testbed->GetMirrorTestbed().Environment().SetTestCaseID(
+      "634ca5f6-1a50-4a37-9936-d03d86e7aaeb");
+  const int kPortsToUseInTest = 2;
+  ASSERT_OK_AND_ASSIGN(
+      const std::vector<std::string> sut_ports_ids,
+      GetNUpInterfaceIDs(GetParam().mirror_testbed->GetMirrorTestbed().Sut(),
+                         kPortsToUseInTest));
+
+  std::vector<p4::v1::Entity> rif_entities;
+  for (int r = 0; r < kPortsToUseInTest; ++r) {
+    ASSERT_OK_AND_ASSIGN(
+        const auto rifs,
+        CreateRifTableEntities(ir_p4info_, sut_ports_ids[r], kDefaultInstance,
+                               kOriginalSrcMacAddress));
+    rif_entities.insert(rif_entities.end(), rifs.begin(), rifs.end());
+  }
+  EXPECT_OK(pdpi::InstallPiEntities(sut_p4rt_session_.get(), ir_p4info_,
+                                    rif_entities));
+
+  std::vector<ReplicaPair> replicas;
+  for (int r = 0; r < kPortsToUseInTest; ++r) {
+    const std::string& port_id = sut_ports_ids[r];
+    replicas.push_back({port_id, kDefaultInstance});
+  }
+  const int kMulticastGroupId = 1;
+  ASSERT_OK_AND_ASSIGN(
+      const auto mc_entities,
+      CreateMulticastGroupEntities(ir_p4info_, kMulticastGroupId, replicas));
+  EXPECT_OK(pdpi::InstallPiEntities(sut_p4rt_session_.get(), ir_p4info_,
+                                    mc_entities));
+
+  // Create default VRF.
+  ASSERT_OK_AND_ASSIGN(const std::vector<p4::v1::Entity> vrf_entities,
+                       sai::EntryBuilder()
+                           .AddVrfEntry(kDefaultMulticastVrf)
+                           .LogPdEntries()
+                           .GetDedupedPiEntities(ir_p4info_));
+  EXPECT_OK(pdpi::InstallPiEntities(sut_p4rt_session_.get(), ir_p4info_,
+                                    vrf_entities));
+
+  ASSERT_OK_AND_ASSIGN(const netaddr::Ipv6Address ipv6_address,
+                       GetIpv6AddressForReplica(kMulticastGroupId));
+  std::string vrf_id = std::string(kDefaultMulticastVrf);
+  ASSERT_OK_AND_ASSIGN(
+      const auto ipmc_entities,
+      CreateIpv6MulticastTableEntities(ir_p4info_, vrf_id, ipv6_address,
+                                       kMulticastGroupId));
+  EXPECT_OK(pdpi::InstallPiEntities(sut_p4rt_session_.get(), ir_p4info_,
+                                    ipmc_entities));
+
+  // Attempting to delete multicast group while in use results in an error.
+  EXPECT_THAT(
+      ClearEntities(*sut_p4rt_session_, ir_p4info_, mc_entities),
+      StatusIs(
+          absl::StatusCode::kUnknown,
+          AllOf(HasSubstr("#1: INVALID_ARGUMENT"),
+                HasSubstr(
+                    "[OrchAgent] Multicast group 0x0001 cannot be deleted"))));
+
+  // Clean up.
+  EXPECT_OK(ClearEntities(*sut_p4rt_session_, ir_p4info_, ipmc_entities));
+  EXPECT_OK(ClearEntities(*sut_p4rt_session_, ir_p4info_, vrf_entities));
+  EXPECT_OK(ClearEntities(*sut_p4rt_session_, ir_p4info_, mc_entities));
+  EXPECT_OK(ClearEntities(*sut_p4rt_session_, ir_p4info_, rif_entities));
+}
+
+TEST_P(L3MulticastTestFixture, AbleToProgramExpectedMulticastRifCapacity) {
+  GetParam().mirror_testbed->GetMirrorTestbed().Environment().SetTestCaseID(
+      "81099928-4181-4366-9519-885359a2f7e3");
+
+  constexpr int kPortsToUseInTest = 8;
+  ASSERT_OK_AND_ASSIGN(
+      const std::vector<std::string> sut_ports_ids,
+      GetNUpInterfaceIDs(GetParam().mirror_testbed->GetMirrorTestbed().Sut(),
+                         kPortsToUseInTest));
+
+  std::vector<p4::v1::Entity> rif_entities;
+
+  // Program RIFs one by one, in case we do not reach our intended limit.
+  absl::Time start_time = absl::Now();
+  for (int r = 0; r < kMaxRifs; ++r) {
+    const std::string& port_id = sut_ports_ids[r % kPortsToUseInTest];
+    ASSERT_OK_AND_ASSIGN(netaddr::MacAddress src_mac,
+                         GetSrcMacForReplica(/*multicast_group_id=*/r,
+                                             /*replicas_per_group=*/1,
+                                             /*replicas_number=*/0));
+    ASSERT_OK_AND_ASSIGN(
+        auto rifs,
+        CreateRifTableEntities(ir_p4info_, port_id,
+                               /*instance=*/r / kPortsToUseInTest, src_mac));
+
+    absl::Status add_status =
+        pdpi::InstallPiEntities(sut_p4rt_session_.get(), ir_p4info_, rifs);
+    ASSERT_OK(add_status)
+        << "Unable to fill multicast_router_interface_table.  Failed on entity "
+        << (rif_entities.size() + 1) << " of " << kMaxRifs;
+
+    rif_entities.insert(rif_entities.end(), rifs.begin(), rifs.end());
+  }
+  LOG(INFO) << "Successfully programmed " << rif_entities.size()
+            << " multicast_router_interface_table entities.";
+  LOG(INFO) << "Total programming time: " << (absl::Now() - start_time);
+
+  // Clean up.
+  EXPECT_OK(ClearEntities(*sut_p4rt_session_, ir_p4info_, rif_entities));
+}
+
+TEST_P(L3MulticastTestFixture, AbleToProgramExpectedMulticastGroupCapacity) {
+  GetParam().mirror_testbed->GetMirrorTestbed().Environment().SetTestCaseID(
+      "d35ff878-dc12-4623-82d4-81298006482a");
+
+  constexpr int kPortsToUseInTest = 16;
+  ASSERT_OK_AND_ASSIGN(
+      const std::vector<std::string> sut_ports_ids,
+      GetNUpInterfaceIDs(GetParam().mirror_testbed->GetMirrorTestbed().Sut(),
+                         kPortsToUseInTest));
+
+  // Setup RIFs and populate replicas.
+  std::vector<ReplicaPair> replicas;
+  sai::EntryBuilder rif_builder;
+  for (int port_index = 0; port_index < kPortsToUseInTest; ++port_index) {
+    const std::string& port_id = sut_ports_ids[port_index % kPortsToUseInTest];
+    replicas.push_back({port_id, kDefaultInstance});
+    ASSERT_OK_AND_ASSIGN(
+        netaddr::MacAddress src_mac,
+        GetSrcMacForReplica(/*multicast_group_id=*/1,
+                            /*replicas_per_group=*/kPortsToUseInTest,
+                            /*replicas_number=*/port_index));
+
+    // Add a normal replication RIF and a "drop" RIF to correspond to the state
+    // a multicast group member is allowed to be in.
+    rif_builder
+        .AddMulticastRouterInterfaceEntry(
+            {.multicast_replica_port = port_id,
+             .multicast_replica_instance = kDefaultInstance,
+             .src_mac = src_mac})
+        .AddMulticastRouterInterfaceEntry(
+            {.multicast_replica_port = port_id,
+             .multicast_replica_instance = kDefaultInstance + 1,
+             .src_mac = kDropSrcMacAddress});
+  }
+  ASSERT_OK_AND_ASSIGN(
+      std::vector<p4::v1::Entity> rif_entities,
+      rif_builder.LogPdEntries().GetDedupedPiEntities(ir_p4info_));
+
+  // Send all RIF entities in one batch.
+  absl::Time rif_start_time = absl::Now();
+  ASSERT_OK(pdpi::InstallPiEntities(sut_p4rt_session_.get(), ir_p4info_,
+                                    rif_entities));
+  LOG(INFO) << "Total RIF programming time: " << (absl::Now() - rif_start_time);
+
+  // Now setup multicast groups.
+  std::vector<p4::v1::Entity> group_entities;
+  // Program multicast groups one by one, in case we do not reach our intended
+  // limit.
+  LOG(INFO) << "Intending to program " << kMaxMulticastGroups
+            << " IP multicast groups with " << kPortsToUseInTest
+            << " members per group.";
+  absl::Time group_start_time = absl::Now();
+  // Note: multicast group ID 0 is not valid.
+  for (int multicast_group_id = 1; multicast_group_id <= kMaxMulticastGroups;
+       ++multicast_group_id) {
+    ASSERT_OK_AND_ASSIGN(
+        auto multicast_group_entities,
+        CreateMulticastGroupEntities(ir_p4info_, multicast_group_id, replicas));
+    absl::Status add_status = pdpi::InstallPiEntities(
+        sut_p4rt_session_.get(), ir_p4info_, multicast_group_entities);
+    if (!add_status.ok()) {
+      LOG(ERROR) << "Unable to fill replication table to hold "
+                 << kMaxMulticastGroups << " IP multicast groups.";
+      LOG(ERROR) << "Only " << group_entities.size() << " were programmed.";
+    }
+    ASSERT_OK(add_status);
+    group_entities.insert(group_entities.end(),
+                          multicast_group_entities.begin(),
+                          multicast_group_entities.end());
+  }
+  LOG(INFO) << "Successfully programmed " << group_entities.size()
+            << " entries.";
+  LOG(INFO) << "Total multicast group programming time: "
+            << (absl::Now() - group_start_time);
+
+  // Clean up.  Multicast groups must be removed before the RIFs they reference.
+  EXPECT_OK(ClearEntities(*sut_p4rt_session_, ir_p4info_, group_entities));
+  EXPECT_OK(ClearEntities(*sut_p4rt_session_, ir_p4info_, rif_entities));
+}
+
 // TEST_P(L3MulticastTestFixture, PerformanceInitializationTime) {
 //   GetParam().mirror_testbed->GetMirrorTestbed().Environment().SetTestCaseID(
 //       "bb3b9c48-30bc-4e63-9bbb-b17dc0f806b9");
@@ -969,13 +1254,12 @@ void L3MulticastTestFixture::SetUp() {
   GetParam().mirror_testbed->SetUp();
   thinkit::MirrorTestbed& testbed =
       GetParam().mirror_testbed->GetMirrorTestbed();
-  // Initialize the connection and clear table entries for the SUT and Control
-  // switch.
+  // Initialize the connection and clear table entries for the SUT.
   ASSERT_OK_AND_ASSIGN(
-      std::tie(sut_p4rt_session_, control_switch_p4rt_session_),
-      pins_test::ConfigureSwitchPairAndReturnP4RuntimeSessionPair(
-          testbed.Sut(), testbed.ControlSwitch(), GetParam().gnmi_config,
-          GetParam().p4info));
+      sut_p4rt_session_,
+      pins_test::ConfigureSwitchAndReturnP4RuntimeSession(
+          testbed.Sut(), GetParam().gnmi_config, GetParam().p4info));
+  // There is no need to push a config to the control switch.
   ASSERT_OK_AND_ASSIGN(ir_p4info_, pdpi::CreateIrP4Info(*GetParam().p4info));
 }
 
