@@ -125,6 +125,8 @@ TEST_P(PacketForwardingTestFixture, PacketForwardingTest) {
                })pb");
 
   ASSERT_OK_AND_ASSIGN(auto testbed, GetTestbedWithRequirements(requirements));
+  testbed->Environment().SetTestCaseID("7d8bec11-a627-4837-bf15-2c9c0fd9ffaa");
+
   std::vector<InterfaceLink> control_links =
       FromTestbed(GetAllControlLinks, *testbed);
 
@@ -223,8 +225,9 @@ TEST_P(PacketForwardingTestFixture, AllPortsPacketForwardingTest) {
                })pb");
 
   ASSERT_OK_AND_ASSIGN(auto testbed, GetTestbedWithRequirements(requirements));
-  ASSERT_OK_AND_ASSIGN(auto gnmi_stub, testbed->Sut().CreateGnmiStub());
+  testbed->Environment().SetTestCaseID("818f3664-e377-4d8a-8203-4c4e1cbf70f9");
 
+  ASSERT_OK_AND_ASSIGN(auto gnmi_stub, testbed->Sut().CreateGnmiStub());
   std::vector<std::string> sut_interfaces =
       GetSutInterfaces(FromTestbed(GetAllControlLinks, *testbed));
 
@@ -291,6 +294,8 @@ TEST_P(PacketForwardingTestFixture, MtuPacketForwardingTest) {
                })pb");
 
   ASSERT_OK_AND_ASSIGN(auto testbed, GetTestbedWithRequirements(requirements));
+  testbed->Environment().SetTestCaseID("f2ad0286-43ba-4f22-a503-10c8c3bbe00f");
+
   ASSERT_OK_AND_ASSIGN(auto gnmi_stub, testbed->Sut().CreateGnmiStub());
   std::vector<std::string> sut_interfaces =
       GetSutInterfaces(FromTestbed(GetAllControlLinks, *testbed));

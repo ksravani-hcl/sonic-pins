@@ -36,6 +36,7 @@ namespace {
 
 constexpr absl::string_view k2SeptemberRelease = "pins_release_20240902";
 constexpr absl::string_view k6NovemberRelease = "pins_release_20241106";
+constexpr absl::string_view k20NovemberRelease = "pins_release_20241120";
 constexpr char kSyslogFile[] = "/var/log/tmp/sandcastle.log";
 constexpr char kGrepAclRecarvedTablesCmd[] =
     "grep \'Removing modified nonessential ACL table\' $0 | cut -d ' ' -f 16";
@@ -71,6 +72,13 @@ absl::Status VerifyAclRecarvingTelemetry(absl::string_view version,
     allowlist = absl::flat_hash_set<absl::string_view>({
         "acl_ingress_table",
     });
+  }
+
+  if (absl::StrContains(software_info.secondary_network_stack.version,
+                        k20NovemberRelease)) {
+    // NSF upgrading from 20 Nov release --> new image.
+    allowlist = absl::flat_hash_set<absl::string_view>(
+        {"acl_ingress_table", "acl_egress_table"});
   }
 
   std::string allowlist_str;
