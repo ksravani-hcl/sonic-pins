@@ -7,6 +7,24 @@ on:
     branches: [ main ]
 
 jobs:
+  build-and-format:
+    runs-on: ubuntu-latest
+ 
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+ 
+    - name: Install dependencies
+      run: sudo apt-get update && sudo apt-get install -y clang-format git
+ 
+    - name: Run git clang-format
+      run: |
+        git fetch origin main
+        git clang-format origin/main --in-place
+
+jobs:
   build:
     name: Bazel Build and Test
 
